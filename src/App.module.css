@@ -1,0 +1,80 @@
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #0d1b2a;
+  color: #e0e6ef;
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+.full {
+  height: 100vh;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 0 20px;
+  height: 48px;
+  background: #131f2e;
+  border-bottom: 1px solid #1e3a5f;
+  flex-shrink: 0;
+}
+
+.logo {
+  font-size: 15px;
+  font-weight: 700;
+  color: #64b5f6;
+  letter-spacing: 0.5px;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.tab {
+  background: none;
+  border: none;
+  color: #78909c;
+  padding: 6px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.tab:hover {
+  color: #b0bec5;
+  background: #1a2e42;
+}
+
+.activeTab {
+  color: #e0e6ef !important;
+  background: #1a2e42 !important;
+  border-bottom: 2px solid #1976d2;
+  border-radius: 4px 4px 0 0;
+}
+
+.main {
+  flex: 1;
+  overflow: hidden;
+}
+
+.mapLayout {
+  display: flex;
+  height: 100%;
+}
+
+.mapArea {
+  flex: 1;
+  overflow: hidden;
+}
+
+.listPanel {
+  width: 380px;
+  flex-shrink: 0;
+  overflow: hidden;
+}

@@ -1,0 +1,186 @@
+const BASE = '/opensearch';
+
+export interface ServiceMapEdge {
+  source: string;
+  target: string;
+  resource: string;
+  traceGroupName: string;
+}
+
+export interface TraceRow {
+  traceId: string;
+  rootName: string;
+  startTime: string;
+  durationMs: number;
+}
+
+export interface Span {
+  traceId: string;
+  spanId: string;
+  parentSpanId: string;
+  serviceName: string;
+  name: string;
+  kind: string;
+  status: string;
+  startTime: string;
+  durationInNanos: number;
+  attributes?: Record<string, unknown>;
+}
+
+export interface ServiceStat {
+  service: string;
+  total: number;
+  errors: number;
+  errorRate: number;
+  p50Ms: number;
+  p99Ms: number;
+}
+
+async function query(index: string, body: unknown) {
+  const res = await fetch(`${BASE}/${index}/_search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`OpenSearch error: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchServiceMap(): Promise<ServiceMapEdge[]> {
+  const data = await query('otel-v1-apm-service-map', {
+    size: 200,
+    query: { match_all: {} },
+    _source: ['serviceName', 'destination', 'target', 'traceGroupName'],
+  });
+
+  const edges: ServiceMapEdge[] = [];
+  for (const hit of data.hits.hits) {
+    const s = hit._source;
+    if (s.destination?.domain) {
+      edges.push({
+        source: s.serviceName,
+        target: s.destination.domain,
+        resource: s.destination.resource ?? '',
+        traceGroupName: s.traceGroupName ?? '',
+      });
+    }
+  }
+  return edges;
+}
+
+export async function fetchErrorTraces(
+  serviceName: string,
+  limit = 20
+): Promise<TraceRow[]> {
+  const data = await query('otel-v1-apm-span-*', {
+    size: 0,
+    query: {
+      bool: {
+        must: [
+          { term: { serviceName } },
+          { term: { status: 'STATUS_CODE_ERROR' } },
+        ],
+      },
+    },
+    aggs: {
+      traces: {
+        terms: { field: 'traceId.keyword', size: limit },
+      },
+    },
+  });
+
+  const traceIds: string[] = (data.aggregations?.traces?.buckets ?? []).map(
+    (b: { key: string }) => b.key
+  );
+  if (traceIds.length === 0) return [];
+
+  const spansData = await query('otel-v1-apm-span-*', {
+    size: traceIds.length * 2,
+    query: {
+      bool: {
+        must: [
+          { terms: { 'traceId.keyword': traceIds } },
+          { term: { parentSpanId: '' } },
+        ],
+      },
+    },
+    _source: ['traceId', 'name', 'startTime', 'durationInNanos'],
+    sort: [{ startTime: { order: 'desc' } }],
+  });
+
+  const rootsByTrace: Record<string, TraceRow> = {};
+  for (const hit of spansData.hits.hits) {
+    const s = hit._source;
+    if (!rootsByTrace[s.traceId]) {
+      rootsByTrace[s.traceId] = {
+        traceId: s.traceId,
+        rootName: s.name,
+        startTime: s.startTime,
+        durationMs: Math.round((s.durationInNanos ?? 0) / 1_000_000),
+      };
+    }
+  }
+
+  return traceIds
+    .map((id) => rootsByTrace[id])
+    .filter(Boolean);
+}
+
+export async function fetchTraceSpans(traceId: string): Promise<Span[]> {
+  const data = await query('otel-v1-apm-span-*', {
+    size: 500,
+    query: { term: { 'traceId.keyword': traceId } },
+    _source: [
+      'traceId', 'spanId', 'parentSpanId', 'serviceName',
+      'name', 'kind', 'status', 'startTime', 'durationInNanos', 'attributes',
+    ],
+    sort: [{ startTime: { order: 'asc' } }],
+  });
+  return data.hits.hits.map((h: { _source: Span }) => h._source);
+}
+
+export async function fetchErrorStats(
+  rangeMinutes: number
+): Promise<ServiceStat[]> {
+  const data = await query('otel-v1-apm-span-*', {
+    size: 0,
+    query: {
+      bool: {
+        must: [
+          { term: { kind: 'SPAN_KIND_SERVER' } },
+          { range: { startTime: { gte: `now-${rangeMinutes}m` } } },
+        ],
+      },
+    },
+    aggs: {
+      by_service: {
+        terms: { field: 'serviceName.keyword', size: 20 },
+        aggs: {
+          error_count: { filter: { term: { status: 'STATUS_CODE_ERROR' } } },
+          p50: { percentiles: { field: 'durationInNanos', percents: [50] } },
+          p99: { percentiles: { field: 'durationInNanos', percents: [99] } },
+        },
+      },
+    },
+  });
+
+  return (data.aggregations?.by_service?.buckets ?? []).map(
+    (b: {
+      key: string;
+      doc_count: number;
+      error_count: { doc_count: number };
+      p50: { values: { '50.0': number } };
+      p99: { values: { '99.0': number } };
+    }) => ({
+      service: b.key,
+      total: b.doc_count,
+      errors: b.error_count.doc_count,
+      errorRate:
+        b.doc_count > 0
+          ? Math.round((b.error_count.doc_count / b.doc_count) * 1000) / 10
+          : 0,
+      p50Ms: Math.round((b.p50.values['50.0'] ?? 0) / 1_000_000),
+      p99Ms: Math.round((b.p99.values['99.0'] ?? 0) / 1_000_000),
+    })
+  );
+}
