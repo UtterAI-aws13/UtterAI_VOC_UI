@@ -116,7 +116,7 @@ export async function fetchRecentTraces(
 export async function fetchTraceSpans(traceId: string): Promise<Span[]> {
   const data = await query('otel-v1-apm-span-*', {
     size: 500,
-    query: { term: { 'traceId.keyword': traceId } },
+    query: { term: { traceId } },
     _source: [
       'traceId', 'spanId', 'parentSpanId', 'serviceName',
       'name', 'kind', 'status', 'startTime', 'durationInNanos', 'attributes',

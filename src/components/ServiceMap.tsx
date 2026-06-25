@@ -9,6 +9,12 @@ interface Props {
   onNodeClick: (serviceName: string) => void;
 }
 
+function edgeLabel(raw: string): string {
+  const clean = raw.replace(/\{[^}]+\}/g, '*').replace(/^(GET|POST|PUT|DELETE|PATCH)\s+/, '');
+  const parts = clean.split('/').filter(Boolean);
+  return parts[parts.length - 1] || raw;
+}
+
 function nodeColor(stat: ServiceStat | undefined): string {
   if (!stat || stat.total === 0) return '#4CAF50';
   if (stat.errorRate > 10) return '#f44336';
@@ -39,21 +45,12 @@ export default function ServiceMap({ edges, stats, onNodeClick }: Props) {
       return { data: { id, label, color: nodeColor(stat) } };
     });
 
-    const edgeMap = new Map<string, { source: string; target: string; labels: string[] }>();
-    for (const e of edges) {
-      const key = `${e.source}→${e.target}`;
-      if (!edgeMap.has(key)) edgeMap.set(key, { source: e.source, target: e.target, labels: [] });
-      const label = e.traceGroupName || e.resource;
-      if (label && !edgeMap.get(key)!.labels.includes(label))
-        edgeMap.get(key)!.labels.push(label);
-    }
-
-    const cyEdges = [...edgeMap.values()].map((e, i) => ({
+    const cyEdges = edges.map((e, i) => ({
       data: {
         id: `e${i}`,
         source: e.source,
         target: e.target,
-        label: e.labels.join('\n'),
+        label: edgeLabel(e.traceGroupName || e.resource),
       },
     }));
 

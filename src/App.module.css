@@ -74,7 +74,8 @@
 }
 
 .listPanel {
-  width: 380px;
+  width: 460px;
   flex-shrink: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  border-left: 1px solid #1e3a5f;
 }

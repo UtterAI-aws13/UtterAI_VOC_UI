@@ -65,15 +65,26 @@
   border-radius: 2px;
 }
 
-.gantt {
+.msg {
+  padding: 32px 24px;
+  color: #607d8b;
+  font-size: 13px;
+}
+
+.ganttWrap {
   flex: 1;
-  overflow-y: auto;
+  overflow: auto;
+  min-height: 0;
+}
+
+.gantt {
+  min-width: 900px;
   padding: 8px 0;
 }
 
 .spanRow {
   display: grid;
-  grid-template-columns: 280px 1fr 60px;
+  grid-template-columns: 300px 1fr 72px;
   align-items: center;
   padding: 3px 16px;
   cursor: pointer;
