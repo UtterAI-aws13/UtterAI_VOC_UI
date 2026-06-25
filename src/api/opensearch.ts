@@ -12,6 +12,7 @@ export interface TraceRow {
   rootName: string;
   startTime: string;
   durationMs: number;
+  hasError?: boolean;
 }
 
 export interface Span {
@@ -68,62 +69,48 @@ export async function fetchServiceMap(): Promise<ServiceMapEdge[]> {
   return edges;
 }
 
-export async function fetchErrorTraces(
+export async function fetchRecentTraces(
   serviceName: string,
   limit = 20
 ): Promise<TraceRow[]> {
   const data = await query('otel-v1-apm-span-*', {
-    size: 0,
+    size: limit,
     query: {
       bool: {
         must: [
           { term: { serviceName } },
-          { term: { status: 'STATUS_CODE_ERROR' } },
+          {
+            bool: {
+              should: [
+                { term: { kind: 'SPAN_KIND_SERVER' } },
+                { term: { kind: 'SPAN_KIND_CONSUMER' } },
+              ],
+              minimum_should_match: 1,
+            },
+          },
         ],
       },
     },
-    aggs: {
-      traces: {
-        terms: { field: 'traceId.keyword', size: limit },
-      },
-    },
-  });
-
-  const traceIds: string[] = (data.aggregations?.traces?.buckets ?? []).map(
-    (b: { key: string }) => b.key
-  );
-  if (traceIds.length === 0) return [];
-
-  const spansData = await query('otel-v1-apm-span-*', {
-    size: traceIds.length * 2,
-    query: {
-      bool: {
-        must: [
-          { terms: { 'traceId.keyword': traceIds } },
-          { term: { parentSpanId: '' } },
-        ],
-      },
-    },
-    _source: ['traceId', 'name', 'startTime', 'durationInNanos'],
     sort: [{ startTime: { order: 'desc' } }],
+    _source: ['traceId', 'name', 'startTime', 'durationInNanos', 'status'],
   });
 
-  const rootsByTrace: Record<string, TraceRow> = {};
-  for (const hit of spansData.hits.hits) {
-    const s = hit._source;
-    if (!rootsByTrace[s.traceId]) {
-      rootsByTrace[s.traceId] = {
-        traceId: s.traceId,
-        rootName: s.name,
-        startTime: s.startTime,
-        durationMs: Math.round((s.durationInNanos ?? 0) / 1_000_000),
-      };
-    }
-  }
-
-  return traceIds
-    .map((id) => rootsByTrace[id])
-    .filter(Boolean);
+  return data.hits.hits.map((h: { _source: Record<string, unknown> }) => {
+    const s = h._source as {
+      traceId: string;
+      name: string;
+      startTime: string;
+      durationInNanos?: number;
+      status?: string;
+    };
+    return {
+      traceId: s.traceId,
+      rootName: s.name,
+      startTime: s.startTime,
+      durationMs: Math.round((s.durationInNanos ?? 0) / 1_000_000),
+      hasError: s.status === 'STATUS_CODE_ERROR',
+    };
+  });
 }
 
 export async function fetchTraceSpans(traceId: string): Promise<Span[]> {
@@ -147,7 +134,15 @@ export async function fetchErrorStats(
     query: {
       bool: {
         must: [
-          { term: { kind: 'SPAN_KIND_SERVER' } },
+          {
+            bool: {
+              should: [
+                { term: { kind: 'SPAN_KIND_SERVER' } },
+                { term: { kind: 'SPAN_KIND_CONSUMER' } },
+              ],
+              minimum_should_match: 1,
+            },
+          },
           { range: { startTime: { gte: `now-${rangeMinutes}m` } } },
         ],
       },

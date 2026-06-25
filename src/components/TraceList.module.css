@@ -82,3 +82,23 @@
   white-space: nowrap;
   text-align: right;
 }
+
+.errorBadge {
+  color: #f44336;
+  font-weight: 600;
+}
+
+.errorRow td {
+  background: rgba(244, 67, 54, 0.06);
+}
+
+.errDot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f44336;
+  margin-right: 5px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}

@@ -30,16 +30,30 @@ export default function ServiceMap({ edges, stats, onNodeClick }: Props) {
       nodeIds.add(e.target);
     });
 
-    const nodes = [...nodeIds].map((id) => ({
-      data: { id, label: id, color: nodeColor(statMap[id]) },
-    }));
+    const nodes = [...nodeIds].map((id) => {
+      const stat = statMap[id];
+      const label =
+        stat && stat.total > 0
+          ? `${id}\n${stat.errorRate.toFixed(1)}% err`
+          : id;
+      return { data: { id, label, color: nodeColor(stat) } };
+    });
 
-    const cyEdges = edges.map((e, i) => ({
+    const edgeMap = new Map<string, { source: string; target: string; labels: string[] }>();
+    for (const e of edges) {
+      const key = `${e.source}→${e.target}`;
+      if (!edgeMap.has(key)) edgeMap.set(key, { source: e.source, target: e.target, labels: [] });
+      const label = e.traceGroupName || e.resource;
+      if (label && !edgeMap.get(key)!.labels.includes(label))
+        edgeMap.get(key)!.labels.push(label);
+    }
+
+    const cyEdges = [...edgeMap.values()].map((e, i) => ({
       data: {
         id: `e${i}`,
         source: e.source,
         target: e.target,
-        label: e.resource,
+        label: e.labels.join('\n'),
       },
     }));
 
@@ -57,12 +71,12 @@ export default function ServiceMap({ edges, stats, onNodeClick }: Props) {
             color: '#fff',
             'text-valign': 'center',
             'text-halign': 'center',
-            'font-size': '12px',
-            width: 110,
-            height: 44,
+            'font-size': '11px',
+            width: 120,
+            height: 52,
             shape: 'roundrectangle',
             'text-wrap': 'wrap',
-            'text-max-width': '100px',
+            'text-max-width': '110px',
           },
         },
         {
@@ -75,10 +89,12 @@ export default function ServiceMap({ edges, stats, onNodeClick }: Props) {
             'curve-style': 'bezier',
             label: 'data(label)',
             'font-size': '9px',
-            color: '#546e7a',
-            'text-background-color': '#1a2332',
+            color: '#78909c',
+            'text-background-color': '#0d1b2a',
             'text-background-opacity': 1,
-            'text-background-padding': '2px',
+            'text-background-padding': '3px',
+            'text-wrap': 'wrap',
+            'text-max-width': '120px',
           },
         },
         {
