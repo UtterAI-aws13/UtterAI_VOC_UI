@@ -10,6 +10,10 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/opensearch/, ''),
         changeOrigin: true,
       },
+      '/loki': {
+        target: 'http://localhost:3100',
+        changeOrigin: true,
+      },
     },
   },
 })

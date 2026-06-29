@@ -13,12 +13,19 @@ function spanColor(serviceName: string): string {
   return SERVICE_COLORS[serviceName] ?? '#607d8b';
 }
 
+export interface ViewLogsInfo {
+  serviceName: string;
+  startMs: number;
+  endMs: number;
+}
+
 interface Props {
   traceId: string;
   onBack: () => void;
+  onViewLogs?: (info: ViewLogsInfo) => void;
 }
 
-export default function TraceDetail({ traceId, onBack }: Props) {
+export default function TraceDetail({ traceId, onBack, onViewLogs }: Props) {
   const [spans, setSpans] = useState<Span[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -177,6 +184,18 @@ export default function TraceDetail({ traceId, onBack }: Props) {
                     {JSON.stringify(selected.attributes, null, 2)}
                   </pre>
                 )}
+              {onViewLogs && (
+                <button
+                  className={styles.logsBtn}
+                  onClick={() => {
+                    const t = new Date(selected.startTime).getTime();
+                    const durMs = Math.ceil((selected.durationInNanos ?? 0) / 1_000_000);
+                    onViewLogs({ serviceName: selected.serviceName, startMs: t - 60_000, endMs: t + durMs + 60_000 });
+                  }}
+                >
+                  로그 보기 →
+                </button>
+              )}
             </div>
           )}
         </>
