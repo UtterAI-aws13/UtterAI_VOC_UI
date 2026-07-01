@@ -71,26 +71,33 @@ export async function fetchServiceMap(): Promise<ServiceMapEdge[]> {
 
 export async function fetchRecentTraces(
   serviceName: string,
-  limit = 20
+  limit = 20,
+  jobId?: string
 ): Promise<TraceRow[]> {
+  // job.id 검색 시: serviceName/kind 필터 없이 전체 서비스 대상으로 조회
+  // attributes 키 "job.id"는 OpenSearch에서 점(.)을 이스케이프해서 쿼리해야 함
+  const esQuery = jobId
+    ? { term: { 'attributes.job\\.id': jobId } }
+    : {
+        bool: {
+          must: [
+            { term: { serviceName } },
+            {
+              bool: {
+                should: [
+                  { term: { kind: 'SPAN_KIND_SERVER' } },
+                  { term: { kind: 'SPAN_KIND_CONSUMER' } },
+                ],
+                minimum_should_match: 1,
+              },
+            },
+          ],
+        },
+      };
+
   const data = await query('otel-v1-apm-span-*', {
     size: limit,
-    query: {
-      bool: {
-        must: [
-          { term: { serviceName } },
-          {
-            bool: {
-              should: [
-                { term: { kind: 'SPAN_KIND_SERVER' } },
-                { term: { kind: 'SPAN_KIND_CONSUMER' } },
-              ],
-              minimum_should_match: 1,
-            },
-          },
-        ],
-      },
-    },
+    query: esQuery,
     sort: [{ startTime: { order: 'desc' } }],
     _source: ['traceId', 'name', 'startTime', 'durationInNanos', 'status'],
   });
