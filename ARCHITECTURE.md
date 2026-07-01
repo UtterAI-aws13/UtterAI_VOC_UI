@@ -669,7 +669,272 @@ App
 
 ## 10. 향후 확장 시 고려사항
 
-- **Loki 프록시 추가** — `vite.config.ts`에 `/loki` 항목 필요
+- **serviceName → namespace 매핑 수정** — 아래 섹션 11 참조. 드릴다운이 잘못된 네임스페이스로 이동하는 버그 존재
 - **ServiceMap 실시간 갱신** — 현재 앱 마운트 시 1회만 로드. ErrorStats처럼 인터벌 추가 가능
 - **절대 시간 범위 UI** — PodLogs의 드릴다운 모드는 range 셀렉터가 무시됨. UI에서 명시적으로 비활성화하거나 절대 시간 범위를 표시하면 더 직관적
 - **TraceDetail parent/child 들여쓰기** — 현재 Gantt는 단순 시간축. `parentSpanId`를 활용한 트리 들여쓰기로 호출 계층 표현 가능
+
+---
+
+## 11. EKS 인프라 구조 (UtterAI_Infra 레포 기반)
+
+### 11-1. 전체 클러스터 구조
+
+```
+VPC (10.0.0.0/16)  |  ap-northeast-2
+│
+├── Public Subnet   → ALB (internet-facing) / NAT Gateway
+│
+└── Private App Subnet → EKS Worker Nodes
+    ├── Managed Node Group: system (t3/t3a medium~large, On-Demand)
+    │   └── CoreDNS, kube-proxy, VPC CNI, LBC, Karpenter, KEDA, metrics-server, NVIDIA Device Plugin
+    │
+    └── Karpenter NodePools (동적 프로비저닝)
+        ├── platform   (t3/t3a medium~large, On-Demand)  ← OpenSearch, Data Prepper 등 플랫폼 파드
+        ├── api        (t3 medium, On-Demand+Spot)        ← utterai-api 네임스페이스
+        ├── cpu-worker (m5/m5a/m6i/m6a xlarge, Spot우선) ← utterai-ai-cpu 네임스페이스
+        ├── batch-worker (c5/c6i/c6a/m5/m6i large~xlarge, Spot우선) ← utterai-batch 네임스페이스
+        └── gpu        (g4dn/g5 xlarge~2xlarge, Spot우선) ← utterai-ai-gpu 네임스페이스
+```
+
+**Karpenter + KEDA 연동 흐름:**
+```
+SQS 메시지 수 증가
+  ↓
+KEDA ScaledObject가 queueLength 기준으로 Worker Deployment replica 증가
+  ↓
+Pod Pending (기존 노드에 자원 없음)
+  ↓
+Karpenter가 Pending Pod의 nodeSelector/toleration/resource request 분석
+  ↓
+해당 NodePool의 EC2 인스턴스 자동 생성 (수십 초 내)
+  ↓
+Pod 배치 → SQS 메시지 처리
+  ↓
+메시지 소진 → KEDA scale-in → Karpenter consolidation → 노드 삭제
+```
+
+---
+
+### 11-2. Kubernetes 네임스페이스 전체 목록
+
+| 네임스페이스 | 워크로드 | NodePool |
+|---|---|---|
+| `utterai-api` | backend API (FastAPI) | api |
+| `utterai-ai-service` | AI 서비스 (HPA 관리) | api |
+| `utterai-ai-cpu` | cpu-worker (전처리, VAD, RAG 보조) | cpu-worker |
+| `utterai-ai-gpu` | ml-gpu-worker (화자 분리, ASR 추론) | gpu |
+| `utterai-batch` | batch-worker (RAG ingest, 리포트 생성) | batch-worker |
+| `utterai-observability` | OTel Collector, OpenSearch, Data Prepper, Grafana 등 | platform |
+| `monitoring` | kube-prometheus-stack, Loki, Tempo | (별도) |
+
+---
+
+### 11-3. OTel 텔레메트리 파이프라인 전체 경로
+
+각 서비스 파드는 환경변수로 OTel 설정을 주입받는다.
+
+```
+# backend (utterai-api 네임스페이스)
+OTEL_SERVICE_NAME=backend
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.utterai-observability.svc.cluster.local:4318
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+OTEL_TRACES_EXPORTER=otlp
+OTEL_METRICS_EXPORTER=otlp
+OTEL_LOGS_EXPORTER=none   ← 로그는 OTel로 보내지 않음 (Promtail이 stdout 수집)
+OTEL_RESOURCE_ATTRIBUTES=deployment.environment=dev,team=utterai
+
+# cpu-worker (utterai-ai-cpu 네임스페이스)
+OTEL_SERVICE_NAME=cpu-worker
+
+# ml-gpu-worker (utterai-ai-gpu 네임스페이스)
+OTEL_SERVICE_NAME=ml-gpu-worker
+```
+
+**OTel Collector 내부 파이프라인:**
+
+```
+서비스 파드 (OTLP HTTP :4318)
+    │
+    ▼
+OTel Collector (utterai-observability/otel-collector)
+    │
+    ├── processors:
+    │   ├── memory_limiter (256MiB 상한)
+    │   ├── attributes/redact (Authorization, Cookie, URL, S3 key 등 민감정보 삭제)
+    │   └── batch
+    │
+    ├── [traces 파이프라인]
+    │   ├── → otlp/tempo  (tempo.monitoring.svc.cluster.local:4317)  ← 장기 저장/Grafana 조회
+    │   ├── → spanmetrics connector  (pipeline.* 메트릭 생성)
+    │   ├── → servicegraph connector (서비스 간 레이턴시 히스토그램 생성)
+    │   └── → otlp/data-prepper  (data-prepper.utterai-observability.svc.cluster.local:21890)
+    │                                ↓
+    │             Data Prepper (OTLP gRPC :21890)
+    │                 ├── raw-trace-pipeline
+    │                 │   └── otel_trace_raw 프로세서 → OpenSearch otel-v1-apm-span-{date}
+    │                 └── service-map-pipeline
+    │                     └── service_map 프로세서 (180초 윈도우) → OpenSearch otel-v1-apm-service-map
+    │
+    ├── [metrics 파이프라인]
+    │   └── → prometheus exporter (:8889)  ← kube-prometheus-stack이 ServiceMonitor로 scrape
+    │
+    └── [logs 파이프라인]   ← 현재 서비스들이 OTEL_LOGS_EXPORTER=none이므로 실제 유입 없음
+        └── → loki (http://loki-gateway.monitoring.svc.cluster.local/loki/api/v1/push)
+```
+
+**로그의 실제 경로 (OTel 아님):**
+```
+서비스 파드 stdout/stderr
+    ↓
+Promtail DaemonSet (monitoring 네임스페이스)
+  → K8s Pod 레이블 자동 수집 (namespace, pod, container)
+    ↓
+Loki Gateway (monitoring/loki-gateway)
+    ↓
+PodLogs UI (fetchLogs → GET /loki/api/v1/query_range)
+```
+
+---
+
+### 11-4. ⚠️ serviceName ↔ Namespace 불일치 (드릴다운 버그)
+
+현재 드릴다운 구현은 `utterai-${serviceName}` 으로 Loki 네임스페이스를 추정하지만, 실제 K8s 네임스페이스와 다르다.
+
+| OpenSearch `serviceName` | 실제 K8s Namespace | `utterai-${serviceName}` (현재 코드) | 일치 여부 |
+|---|---|---|---|
+| `backend` | `utterai-api` | `utterai-backend` | ❌ |
+| `cpu-worker` | `utterai-ai-cpu` | `utterai-cpu-worker` | ❌ |
+| `ml-gpu-worker` | `utterai-ai-gpu` | `utterai-ml-gpu-worker` | ❌ |
+
+→ 매핑되는 네임스페이스가 Loki에 없으므로 폴백(첫 번째 네임스페이스)으로 이동함.
+
+**수정 방향 — `PodLogs.tsx` 마운트 시 네임스페이스 결정 로직에 명시적 매핑 추가:**
+
+```ts
+// src/components/PodLogs.tsx
+const SERVICE_TO_NAMESPACE: Record<string, string> = {
+  'backend':       'utterai-api',
+  'cpu-worker':    'utterai-ai-cpu',
+  'ml-gpu-worker': 'utterai-ai-gpu',
+  'batch-worker':  'utterai-batch',
+};
+
+// 마운트 시 네임스페이스 선택
+const candidate = SERVICE_TO_NAMESPACE[drilldown.serviceName]
+  ?? `utterai-${drilldown.serviceName}`;  // fallback
+setNamespace(ns.includes(candidate) ? candidate : ns[0]);
+```
+
+---
+
+### 11-5. KEDA ScaledObject 상세 (모니터링 관점)
+
+KEDA가 관리하는 큐와 워커의 관계 — VOC UI에서 에러를 볼 때 원인 추적에 필요한 컨텍스트다.
+
+**cpu-worker ScaledObject:**
+```yaml
+namespace: utterai-ai-cpu
+scaleTargetRef: utterai-cpu-worker
+minReplicaCount: 1  # 항상 최소 1개 유지
+maxReplicaCount: 3
+cooldownPeriod: 120s
+
+triggers:
+  - SQS: utterai-dev-audio-preprocess-queue  (queueLength: 5)
+  - SQS: utterai-dev-report-analysis-queue   (queueLength: 5)
+```
+
+**ml-gpu-worker ScaledObject:**
+```yaml
+namespace: utterai-ai-gpu
+scaleTargetRef: utterai-ml-gpu-worker
+minReplicaCount: 0  # 메시지 없으면 0으로 scale-down
+maxReplicaCount: 1
+cooldownPeriod: 300s
+scaleDown.stabilizationWindowSeconds: 300  # 5분 안정화 후 scale-down
+
+triggers:
+  - SQS: utterai-dev-gpu-inference-queue  (queueLength: 1, scaleOnInFlight: true)
+```
+
+`scaleOnInFlight: true` — 처리 중인 메시지(InFlight)도 카운트에 포함. GPU Worker가 처리 중인 동안 추가 인스턴스가 생성되는 것을 방지.
+
+**TraceDetail 에서 발견한 에러 스팬 → SQS 큐 연결:**
+
+| 에러 스팬 serviceName | 해당 SQS 큐 | KEDA 트리거 |
+|---|---|---|
+| `cpu-worker` | audio-preprocess-queue 또는 report-analysis-queue | utterai-cpu-worker-scaledobject |
+| `ml-gpu-worker` | gpu-inference-queue | utterai-ml-gpu-worker-scaledobject |
+| `backend` | 큐 발행자 — SQS sendMessage 실패 시 에러 | HPA (CPU 기반) |
+
+---
+
+### 11-6. OpenSearch 배포 구성
+
+```yaml
+StatefulSet: opensearch (utterai-observability)
+  nodeSelector: karpenter.sh/nodepool=platform  ← platform NodePool에 고정
+  resources: request 500m/2Gi, limit 1CPU/2Gi
+  JVM: -Xms1g -Xmx1g  ← JVM 힙 = 컨테이너 메모리의 절반
+  storage: 20Gi EBS gp2 (ReadWriteOnce)
+
+initContainers:
+  - sysctl vm.max_map_count=262144  (OpenSearch 필수 커널 파라미터)
+  - chown 1000:1000 /data           (EBS는 root로 마운트, OpenSearch는 UID 1000)
+```
+
+**OpenSearch 단일 노드 운영의 제약:**
+- `discovery.type: single-node` — 클러스터 없음
+- `plugins.security.disabled: true` — 인증 없음 (클러스터 내부 접근만 허용)
+- `DISABLE_SECURITY_PLUGIN=true`
+- 고가용성 없음 (platform 노드 장애 시 트레이스 데이터 조회 불가)
+
+---
+
+### 11-7. 전체 관찰 가능성 스택 컴포넌트 목록
+
+| 컴포넌트 | 네임스페이스 | 역할 | 이 UI와의 관계 |
+|---|---|---|---|
+| OTel Collector | `utterai-observability` | 텔레메트리 수집·가공·라우팅 | 모든 트레이스/스팬의 진입점 |
+| Data Prepper | `utterai-observability` | OTLP → OpenSearch JSON 변환 | ServiceMap·TraceDetail 데이터 생성 |
+| OpenSearch | `utterai-observability` | 트레이스 저장 및 검색 | `fetchServiceMap`, `fetchTraceSpans`, `fetchErrorStats` 대상 |
+| Loki | `monitoring` | 로그 저장 | `fetchLogs` 대상 |
+| Tempo | `monitoring` | 트레이스 장기 저장 | (이 UI 미사용 — Grafana에서 사용) |
+| Prometheus | `monitoring` | 메트릭 저장 | (이 UI 미사용 — Grafana에서 사용) |
+| Grafana | `monitoring` | 대시보드 | (이 UI와 병행 사용) |
+| kube-prometheus-stack | `monitoring` | Prometheus Operator + Alert Manager | PrometheusRule로 PodCrashLoop·APIHighErrorRate 등 알림 |
+
+**PrometheusRule 알림 중 이 UI와 연관된 것:**
+
+```yaml
+# utterai-alerts (utterai-observability 네임스페이스)
+UtterAIPodCrashLoopBackOff  → namespace=~"utterai-.*", 2분 지속
+UtterAIPodPendingTooLong    → namespace=~"utterai-.*", 5분 지속 (Karpenter 실패 의심)
+UtterAIGPUWorkerOOMKilled   → namespace="utterai-ai-gpu"
+UtterAIAPIHighErrorRate     → 5xx 에러율 > 5%, 3분 지속
+UtterAIAPIHighLatency       → p95 > 3초, 5분 지속
+UtterAIGPUQueueDepthHigh    → gpu-inference-queue > 20개, 10분 지속
+UtterAIAudioUploadFailureRateHigh → 업로드 실패율 > 10%, 5분 지속
+```
+
+→ Prometheus 알림이 발생했을 때 이 UI에서 해당 서비스의 트레이스를 찾아 로그로 드릴다운하는 것이 주요 사용 시나리오다.
+
+---
+
+### 11-8. OTel 민감정보 redact 처리
+
+OTel Collector의 `attributes/redact` 프로세서가 다음 속성을 스팬에서 삭제한다:
+
+```
+http.request.header.authorization  ← JWT Bearer 토큰
+http.request.header.cookie
+http.response.header.set_cookie
+http.url / url.full                ← 전체 URL (쿼리스트링 포함 가능성)
+aws.s3.key                         ← S3 객체 키
+audio.object_key / audio.key       ← 음성 파일 경로
+rag.key                            ← RAG 인덱스 키
+queue.name                         ← SQS 큐 이름
+```
+
+→ TraceDetail에서 스팬 `attributes`를 볼 때 위 키들은 표시되지 않는다.

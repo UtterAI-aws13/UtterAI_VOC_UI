@@ -14,6 +14,16 @@ export interface DrilldownContext {
   endMs: number;
 }
 
+// OTel serviceName(OpenSearch) → K8s namespace(Loki) 매핑
+// serviceName은 OTEL_SERVICE_NAME 환경변수 값이고,
+// Loki 네임스페이스는 실제 K8s namespace 이름이므로 일치하지 않는다.
+const SERVICE_TO_NAMESPACE: Record<string, string> = {
+  'backend':       'utterai-api',
+  'cpu-worker':    'utterai-ai-cpu',
+  'ml-gpu-worker': 'utterai-ai-gpu',
+  'batch-worker':  'utterai-batch',
+};
+
 type Range = '15m' | '1h' | '3h' | '24h';
 type Level = 'error' | 'warn' | 'debug' | 'info';
 
@@ -76,7 +86,8 @@ export default function PodLogs({ drilldown, onClearDrilldown }: Props) {
         setNamespaces(ns);
         if (ns.length === 0) return;
         if (drilldown) {
-          const candidate = `utterai-${drilldown.serviceName}`;
+          const candidate = SERVICE_TO_NAMESPACE[drilldown.serviceName]
+            ?? `utterai-${drilldown.serviceName}`;
           setNamespace(ns.includes(candidate) ? candidate : ns[0]);
         } else {
           setNamespace(ns[0]);
