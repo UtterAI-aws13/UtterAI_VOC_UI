@@ -38,15 +38,23 @@ kubectl port-forward svc/loki-gateway 3100:80 -n monitoring
 
 서비스 노드를 클릭하면 열린다. 최근 20건의 트레이스를 표시하며, 에러가 있는 행은 붉게 강조된다.
 
-**job_id 검색**
+**검색 모드**
 
-상단 검색창에 `job_id`를 입력하고 Enter(또는 검색 버튼)를 누르면 해당 job의 트레이스를 전체 서비스 대상으로 검색한다. SQS trace propagation이 연결되어 있으므로 backend → cpu-worker → ml-gpu-worker 전 구간이 동일한 traceId로 묶여 있다.
+상단 드롭다운에서 검색 기준을 선택한 뒤 Enter(또는 검색 버튼)를 누른다.
+
+| 모드 | 검색 대상 | 용도 |
+|------|----------|------|
+| `job_id` | `attributes.job.id` | 특정 분석 job의 전체 파이프라인 트레이스 조회 |
+| `user.email` | `attributes.user.email` | 특정 유저가 발생시킨 모든 트레이스 조회 |
+
+두 모드 모두 serviceName 필터 없이 전체 서비스 대상으로 검색한다.
 
 ### 트레이스 상세 (TraceDetail)
 
 트레이스 행을 클릭하면 전체 화면으로 전환되어 Gantt 차트를 표시한다.
 
 - 각 스팬을 클릭하면 하단에 상세 정보(Span ID, 서비스, kind, status, attributes)가 표시된다.
+- 스팬에 `user.id` / `user.email` attribute가 있으면 상단에 **USER 배지**로 강조 표시된다.
 - 스팬 선택 후 **로그 보기 →** 버튼을 클릭하면 해당 서비스·시간대의 로그로 자동 이동한다.
 
 ### 에러 통계 (ErrorStats)
@@ -81,9 +89,13 @@ TraceDetail에서 로그 보기로 진입하면 상단에 드릴다운 배너가
 
 **2. 특정 요청 추적 (job_id 기반)**
 
-트레이스 목록 검색창에 `job_id` 입력 → 해당 job의 트레이스 조회 → TraceDetail에서 전체 파이프라인(backend → cpu-worker → ml-gpu-worker) 스팬 확인
+트레이스 목록 검색창에서 `job_id` 모드 선택 → job_id 입력 → TraceDetail에서 전체 파이프라인(backend → cpu-worker → ml-gpu-worker) 스팬 확인
 
-**3. 에러 스팬 → 로그 드릴다운**
+**3. 에러 발생 유저 특정**
+
+트레이스 목록 검색창에서 `user.email` 모드 선택 → 이메일 입력 → 해당 유저의 요청 트레이스 조회 → 에러가 있는 트레이스 선택 → TraceDetail 스팬 상단의 USER 배지로 유저 확인
+
+**4. 에러 스팬 → 로그 드릴다운**
 
 TraceDetail에서 에러 스팬 클릭 → 로그 보기 → 해당 시점의 파드 로그 확인
 
