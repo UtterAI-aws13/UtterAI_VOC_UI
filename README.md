@@ -71,6 +71,7 @@ TraceDetail에서 로그 보기로 진입하면 상단에 드릴다운 배너가
 | `cpu-worker` | `utterai-ai-cpu` |
 | `ml-gpu-worker` | `utterai-ai-gpu` |
 | `batch-worker` | `utterai-batch` |
+| `ai-service` | `utterai-ai-service` |
 
 ## 주요 사용 시나리오
 

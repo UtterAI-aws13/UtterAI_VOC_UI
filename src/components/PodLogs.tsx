@@ -22,6 +22,7 @@ const SERVICE_TO_NAMESPACE: Record<string, string> = {
   'cpu-worker':    'utterai-ai-cpu',
   'ml-gpu-worker': 'utterai-ai-gpu',
   'batch-worker':  'utterai-batch',
+  'ai-service':    'utterai-ai-service',
 };
 
 type Range = '15m' | '1h' | '3h' | '24h';
