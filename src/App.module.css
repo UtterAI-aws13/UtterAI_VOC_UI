@@ -61,16 +61,109 @@
 .main {
   flex: 1;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.headerRight {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.updatedAt {
+  font-size: 11px;
+  color: #37474f;
+}
+
+.refreshBtn {
+  background: none;
+  border: 1px solid #1e3a5f;
+  color: #546e7a;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.refreshBtn:hover {
+  color: #90a4ae;
+  background: #1a2e42;
+}
+
+/* Service health bar */
+.healthBar {
+  display: flex;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #0a1520;
+  border-bottom: 1px solid #1a2e42;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.healthCard {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: #131f2e;
+  border: 1px solid #1e3a5f;
+  border-left: 3px solid #4CAF50;
+  border-radius: 4px;
+  padding: 6px 12px;
+  min-width: 160px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.healthCard:hover {
+  background: #1a2e42;
+}
+
+.healthName {
+  font-size: 12px;
+  font-weight: 600;
+  color: #cfd8dc;
+}
+
+.healthMetrics {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.healthReq {
+  font-size: 11px;
+  color: #546e7a;
+}
+
+.healthErr {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.healthLat {
+  font-size: 11px;
+  color: #37474f;
 }
 
 .mapLayout {
   display: flex;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
 }
 
 .mapArea {
   flex: 1;
   overflow: hidden;
+  min-height: 0;
 }
 
 .listPanel {
