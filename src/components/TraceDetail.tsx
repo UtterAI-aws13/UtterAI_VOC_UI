@@ -150,8 +150,25 @@ export default function TraceDetail({ traceId, onBack, onViewLogs }: Props) {
             </div>
           </div>
 
-          {selected && (
+          {selected && (() => {
+            const userId = selected.attributes?.['user.id'] as string | undefined;
+            const userEmail = selected.attributes?.['user.email'] as string | undefined;
+            const otherAttrs = selected.attributes
+              ? Object.fromEntries(
+                  Object.entries(selected.attributes).filter(
+                    ([k]) => k !== 'user.id' && k !== 'user.email'
+                  )
+                )
+              : null;
+            return (
             <div className={styles.detail}>
+              {(userId || userEmail) && (
+                <div className={styles.userBadge}>
+                  <span className={styles.userIcon}>USER</span>
+                  {userEmail && <span className={styles.userEmail}>{userEmail}</span>}
+                  {userId && <span className={styles.userId}>id: {userId}</span>}
+                </div>
+              )}
               <div className={styles.detailGrid}>
                 <span className={styles.k}>Span ID</span>
                 <span className={styles.v}>{selected.spanId}</span>
@@ -178,12 +195,11 @@ export default function TraceDetail({ traceId, onBack, onViewLogs }: Props) {
                   {Math.round((selected.durationInNanos ?? 0) / 1_000_000)}ms
                 </span>
               </div>
-              {selected.attributes &&
-                Object.keys(selected.attributes).length > 0 && (
-                  <pre className={styles.attrs}>
-                    {JSON.stringify(selected.attributes, null, 2)}
-                  </pre>
-                )}
+              {otherAttrs && Object.keys(otherAttrs).length > 0 && (
+                <pre className={styles.attrs}>
+                  {JSON.stringify(otherAttrs, null, 2)}
+                </pre>
+              )}
               {onViewLogs && (
                 <button
                   className={styles.logsBtn}
@@ -197,7 +213,8 @@ export default function TraceDetail({ traceId, onBack, onViewLogs }: Props) {
                 </button>
               )}
             </div>
-          )}
+            );
+          })()}
         </>
       )}
     </div>

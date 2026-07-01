@@ -12,25 +12,37 @@ export default function TraceList({ serviceName, onSelectTrace }: Props) {
   const [traces, setTraces] = useState<TraceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [jobIdInput, setJobIdInput] = useState('');
-  const [activeJobId, setActiveJobId] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [searchMode, setSearchMode] = useState<'job_id' | 'user.email'>('job_id');
+  const [activeSearch, setActiveSearch] = useState<{ mode: 'job_id' | 'user.email'; value: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setLoading(true);
     setError(null);
-    setActiveJobId('');
-    setJobIdInput('');
+    setActiveSearch(null);
+    setSearchInput('');
     fetchRecentTraces(serviceName)
       .then(setTraces)
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
   }, [serviceName]);
 
+  const doFetch = (mode: 'job_id' | 'user.email', value: string) => {
+    setLoading(true);
+    setError(null);
+    const jobId = mode === 'job_id' ? value : undefined;
+    const userEmail = mode === 'user.email' ? value : undefined;
+    fetchRecentTraces(serviceName, 20, jobId, userEmail)
+      .then(setTraces)
+      .catch((e) => setError(String(e)))
+      .finally(() => setLoading(false));
+  };
+
   const handleSearch = () => {
-    const trimmed = jobIdInput.trim();
+    const trimmed = searchInput.trim();
     if (!trimmed) {
-      setActiveJobId('');
+      setActiveSearch(null);
       setLoading(true);
       fetchRecentTraces(serviceName)
         .then(setTraces)
@@ -38,13 +50,8 @@ export default function TraceList({ serviceName, onSelectTrace }: Props) {
         .finally(() => setLoading(false));
       return;
     }
-    setActiveJobId(trimmed);
-    setLoading(true);
-    setError(null);
-    fetchRecentTraces(serviceName, 20, trimmed)
-      .then(setTraces)
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
+    setActiveSearch({ mode: searchMode, value: trimmed });
+    doFetch(searchMode, trimmed);
   };
 
   const errorCount = traces.filter((t) => t.hasError).length;
@@ -54,7 +61,9 @@ export default function TraceList({ serviceName, onSelectTrace }: Props) {
       <div className={styles.header}>
         <span className={styles.service}>{serviceName}</span>
         <span className={styles.sub}>
-          {activeJobId ? `job_id 검색: ${traces.length}건` : `최근 ${traces.length}건`}
+          {activeSearch
+            ? `${activeSearch.mode} 검색: ${traces.length}건`
+            : `최근 ${traces.length}건`}
           {errorCount > 0 && (
             <span className={styles.errorBadge}> 에러 {errorCount}</span>
           )}
@@ -62,23 +71,31 @@ export default function TraceList({ serviceName, onSelectTrace }: Props) {
       </div>
 
       <div className={styles.searchRow}>
+        <select
+          className={styles.modeSelect}
+          value={searchMode}
+          onChange={(e) => setSearchMode(e.target.value as 'job_id' | 'user.email')}
+        >
+          <option value="job_id">job_id</option>
+          <option value="user.email">user.email</option>
+        </select>
         <input
           ref={inputRef}
           className={styles.searchInput}
-          placeholder="job_id로 검색..."
-          value={jobIdInput}
-          onChange={(e) => setJobIdInput(e.target.value)}
+          placeholder={searchMode === 'job_id' ? 'job_id 입력...' : '이메일 입력...'}
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
         />
         <button className={styles.searchBtn} onClick={handleSearch}>
           검색
         </button>
-        {activeJobId && (
+        {activeSearch && (
           <button
             className={styles.clearBtn}
             onClick={() => {
-              setJobIdInput('');
-              setActiveJobId('');
+              setSearchInput('');
+              setActiveSearch(null);
               setLoading(true);
               fetchRecentTraces(serviceName)
                 .then(setTraces)
@@ -95,7 +112,9 @@ export default function TraceList({ serviceName, onSelectTrace }: Props) {
       {error && <div className={styles.empty} style={{ color: '#ef9a9a' }}>오류: {error}</div>}
       {!loading && !error && traces.length === 0 ? (
         <div className={styles.empty}>
-          {activeJobId ? `job_id "${activeJobId}" 결과 없음` : '수신된 트레이스 없음'}
+          {activeSearch
+            ? `${activeSearch.mode} "${activeSearch.value}" 결과 없음`
+            : '수신된 트레이스 없음'}
         </div>
       ) : (
         <table className={styles.table}>

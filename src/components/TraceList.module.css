@@ -98,6 +98,22 @@
   margin-bottom: 10px;
 }
 
+.modeSelect {
+  background: #0d1b2a;
+  border: 1px solid #1e3a5f;
+  color: #78909c;
+  padding: 5px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.modeSelect:focus {
+  outline: none;
+  border-color: #1976d2;
+}
+
 .searchInput {
   flex: 1;
   background: #0d1b2a;

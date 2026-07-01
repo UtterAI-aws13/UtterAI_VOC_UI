@@ -194,6 +194,40 @@
   margin: 0;
 }
 
+.userBadge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #0d2137;
+  border: 1px solid #1565c0;
+  border-radius: 4px;
+  padding: 5px 10px;
+  margin-bottom: 8px;
+}
+
+.userIcon {
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  background: #1565c0;
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+.userEmail {
+  font-size: 12px;
+  color: #64b5f6;
+  font-family: monospace;
+}
+
+.userId {
+  font-size: 11px;
+  color: #546e7a;
+  font-family: monospace;
+}
+
 .logsBtn {
   margin-top: 10px;
   background: #0d2137;
