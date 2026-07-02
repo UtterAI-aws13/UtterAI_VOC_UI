@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import {
   fetchContainers,
   fetchLogs,
@@ -169,15 +170,26 @@ export default function PodLogs({ drilldown, onClearDrilldown }: Props) {
 
   function highlightEmail(line: string, email: string) {
     if (!email) return <>{line}</>;
-    const idx = line.indexOf(email);
-    if (idx === -1) return <>{line}</>;
-    return (
-      <>
-        {line.slice(0, idx)}
-        <mark className={styles.emailMark}>{email}</mark>
-        {line.slice(idx + email.length)}
-      </>
-    );
+    const lower = line.toLowerCase();
+    const needle = email.toLowerCase();
+    if (!lower.includes(needle)) return <>{line}</>;
+
+    const parts: ReactNode[] = [];
+    let cursor = 0;
+    let idx = lower.indexOf(needle, cursor);
+    let key = 0;
+    while (idx !== -1) {
+      parts.push(<Fragment key={key++}>{line.slice(cursor, idx)}</Fragment>);
+      parts.push(
+        <mark key={key++} className={styles.emailMark}>
+          {line.slice(idx, idx + email.length)}
+        </mark>
+      );
+      cursor = idx + email.length;
+      idx = lower.indexOf(needle, cursor);
+    }
+    parts.push(<Fragment key={key++}>{line.slice(cursor)}</Fragment>);
+    return <>{parts}</>;
   }
 
   return (
