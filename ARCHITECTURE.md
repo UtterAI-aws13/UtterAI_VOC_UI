@@ -30,6 +30,18 @@
 
 두 소스 모두 Vite 개발 서버의 프록시를 통해 CORS 없이 접근한다 (`vite.config.ts`).
 
+### 핵심 컴포넌트란?
+
+| 컴포넌트 | 무엇인가 | 이 프로젝트에서의 역할 |
+|---|---|---|
+| **OpenSearch** | Elasticsearch 7.10을 포크해 시작된 오픈소스 검색·분석 엔진. Lucene 기반 역인덱스(inverted index)로 모든 필드를 색인해두기 때문에 필드별 필터·정렬·집계(aggregation)가 빠르다 | 트레이스 스팬, 서비스맵 호출 관계, 에러 통계를 저장·검색하는 1차 데이터 스토어. `fetchServiceMap`, `fetchRecentTraces`, `fetchTraceSpans`, `fetchErrorStats`가 모두 이 인덱스를 조회 |
+| **Data Prepper** | OpenSearch 프로젝트 산하의 서버사이드 데이터 수집·가공기. Logstash와 비슷한 포지션으로, OTLP로 들어온 원시 텔레메트리를 파이프라인 단위로 필터링·변환해 OpenSearch가 색인할 수 있는 문서 형태로 만든다 | OTel Collector와 OpenSearch 사이의 "변환기". `raw-trace-pipeline`이 스팬을 `otel-v1-apm-span-{date}`로, `service-map-pipeline`이 180초 슬라이딩 윈도우로 호출 관계를 집계해 `otel-v1-apm-service-map`으로 적재한다 (자세한 파이프라인 구조는 섹션 11-3 참고) |
+| **Loki** | Grafana Loki. OpenSearch와 달리 로그 **본문은 색인하지 않고** `namespace`/`pod`/`container` 같은 **레이블만 색인**한다. 쿼리 시 레이블로 스트림을 먼저 좁힌 뒤 본문은 grep 방식으로 순차 스캔 — 그만큼 저장 비용이 낮아 대량 로그에 적합하다 | 파드 stdout/stderr 로그 저장소. PodLogs 탭이 조회하는 유일한 소스 (`fetchNamespaces`/`fetchPods`/`fetchContainers`/`fetchLogs`) |
+
+**OpenSearch와 Loki를 함께 쓰는 이유:**
+- 트레이스/스팬은 필드가 많고(서비스명, 상태코드, duration 등) 필드별 집계·정렬이 필요하다 → 역인덱스 기반 OpenSearch가 유리
+- 로그는 텍스트 그 자체가 데이터이고 유입량이 훨씬 많다 → 전체 텍스트를 색인하는 OpenSearch보다, 레이블만 색인하는 Loki가 훨씬 저비용
+
 ---
 
 ## 2. 데이터 흐름 전체도
@@ -906,6 +918,24 @@ initContainers:
 - `plugins.security.disabled: true` — 인증 없음 (클러스터 내부 접근만 허용)
 - `DISABLE_SECURITY_PLUGIN=true`
 - 고가용성 없음 (platform 노드 장애 시 트레이스 데이터 조회 불가)
+
+---
+
+### 11-6-1. OpenSearch 배포 방식 — EKS 자체 호스팅 vs Amazon OpenSearch Service (관리형)
+
+"OpenSearch"라는 이름은 같지만, 실무에서는 배포 방식이 크게 두 갈래로 나뉜다. **이 프로젝트는 ① 자체 호스팅 방식을 쓴다.**
+
+| 구분 | ① EKS 자체 호스팅 OpenSearch (이 프로젝트) | ② Amazon OpenSearch Service (AWS 관리형) |
+|---|---|---|
+| 배포 형태 | EKS 클러스터 안에 StatefulSet Pod로 직접 실행 (섹션 11-6) | AWS가 별도로 운영하는 완전관리형 서비스. EKS 클러스터 바깥의 리소스 |
+| 설치 방식 | Helm chart 등으로 매니페스트를 직접 배포 — 클러스터에 상주하는 워크로드일 뿐, EKS 공식 애드온 목록(VPC CNI, CoreDNS, kube-proxy, EBS CSI 등)에 속하는 **관리형 애드온은 아니다** | AWS 콘솔/API/Terraform으로 "도메인(domain)"을 생성. EKS와는 VPC Peering/PrivateLink 등 네트워크로만 연결 |
+| 클러스터링/HA | `discovery.type: single-node` — 단일 노드, 장애 시 전체 다운 (섹션 11-6) | Multi-AZ, 전용 마스터 노드, 자동 스냅샷 등 HA를 AWS가 관리 |
+| 보안 | `plugins.security.disabled: true` — 인증 없음, 클러스터 내부망 접근만 허용 | IAM 정책, 파인그레인드 액세스 컨트롤(FGAC), VPC/IP 기반 접근 제어를 AWS가 제공 |
+| 스케일링 | Karpenter `platform` NodePool 한도 내에서 수동 조정 (JVM 힙 등 파드 스펙을 직접 튜닝) | 콘솔/API로 인스턴스 타입·수량 변경, 무중단 블루/그린 배포 지원 |
+| 운영 부담 | 팀이 직접 패치·백업·용량 계획·장애 대응 | AWS가 패치·백업·모니터링 상당 부분을 담당 (관리형 프리미엄만큼 비용 ↑) |
+| 비용 구조 | EC2/EBS 비용만 발생 (Karpenter가 스팟/온디맨드 인스턴스를 선택) | 관리형 프리미엄이 붙은 인스턴스 시간당 과금 + EBS |
+
+> **정리:** 두 방식 모두 동일한 오픈소스 OpenSearch 엔진을 쓰지만, **누가 운영·관리하느냐**가 본질적 차이다. 이 프로젝트는 dev 환경 비용 절감과 클러스터 내부 트래픽만 처리한다는 점 때문에 자체 호스팅(①)을 택한 것으로 보이며, 섹션 11-6에서 보듯 단일 노드·무인증 구성이라 프로덕션 수준의 HA/보안 요건이 생기면 Amazon OpenSearch Service(②)로의 마이그레이션을 고려해야 한다.
 
 ---
 
