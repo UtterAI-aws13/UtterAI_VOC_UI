@@ -3,6 +3,43 @@
 UtterAI 서비스군의 애플리케이션 레벨 모니터링 대시보드.  
 OpenSearch(트레이스)와 Loki(로그)를 데이터 소스로 사용하며, 다른 레포 코드를 수정하지 않고 읽기 전용으로 동작한다.
 
+## 인프라 모니터링과 이 UI는 무엇이 다른가
+
+UtterAI 인프라(`UtterAI_Infra` 레포)에는 **kube-prometheus-stack(Prometheus + Grafana) 기반 모니터링이 이미 별도로 구축되어 있다.** 이 UI는 그것을 대체하지 않고, 관측 대상이 다른 별도 레이어로 병행 운영된다.
+
+| | 인프라 레벨 모니터링 (`UtterAI_Infra`) | 앱 레벨 모니터링 (이 레포) |
+|---|---|---|
+| 스택 | Prometheus + Grafana, Alertmanager, Loki, Tempo, Kubecost | OpenSearch + Data Prepper, Loki(공용) |
+| 보는 것 | node/pod CPU·메모리, Pod 상태(Pending/CrashLoop/OOMKilled), Karpenter 오토스케일링, 큐 적체, 비용 | 서비스 간 호출 관계(Service Map), 트레이스 하나의 전체 흐름(Gantt), 에러율/레이턴시, **어떤 유저의 요청에서 에러가 났는지** |
+| 조회 단위 | 네임스페이스·Pod·노드 단위 시계열 | traceId·job_id·user.email 단위 개별 요청 |
+| 접근 방식 | `kubectl port-forward`로 Grafana 접속, 대시보드에서 패널 확인 | 이 UI에서 Service Map 클릭 → 트레이스 → 로그로 드릴다운 |
+| 알림 | Prometheus Alert → Alertmanager → Discord `#monitoring-alerts` (임계치 기반 자동 알림) | 알림 기능 없음. VOC(유저 문의) 접수 후 **사후 조사**용 조회 도구 |
+| 트리거 시점 | 노드 부족, OOM, 큐 적체, 에러율 급증 등 인프라 이상 징후가 알림으로 먼저 옴 | "특정 유저 A가 O시경 분석이 실패했다고 신고" 같은 VOC가 접수된 뒤, 그 유저·시간대의 요청을 역추적할 때 |
+
+**왜 두 레이어로 나눴나:** 원래는 Grafana의 Service Graph(Tempo 기반)로 서비스 토폴로지를 보려 했으나, `backend → SQS → cpu-worker → SQS → ml-gpu-worker`처럼 SQS로 끊어지는 비동기 구조에서는 CLIENT↔SERVER 스팬 페어링이 TTL 안에 매칭되지 않아 구조적으로 동작하지 않았다. 그래서 서비스 간 흐름·개별 요청 추적에 특화된 별도 스택(OpenSearch + Data Prepper)과 전용 UI를 만들었다. Tempo·Prometheus·Loki는 인프라 레벨 관측용으로 계속 유지되며, 이 UI와 데이터를 공유하는 것은 Loki(로그)뿐이다.
+
+## 데이터가 만들어지는 과정 (인프라 관점)
+
+이 UI는 아무것도 직접 수집하지 않는다. 모든 데이터는 각 서비스 Pod에 주입된 OpenTelemetry SDK에서 시작해서, 클러스터 내부 파이프라인을 거쳐 OpenSearch/Loki에 쌓인 것을 읽기 전용으로 조회할 뿐이다.
+
+```
+[backend / cpu-worker / ml-gpu-worker Pod]
+  OTel SDK가 요청마다 스팬(작업 단위 기록)을 생성
+      │ OTLP HTTP (:4318)
+      ▼
+[OTel Collector]  (utterai-observability 네임스페이스)
+  하나의 스팬을 3갈래로 동시 전달 (앱 코드는 한 번만 계측하면 됨)
+      ├─▶ Tempo            → Grafana에서 트레이스 조회 (인프라 레벨, 유지)
+      ├─▶ spanmetrics      → Prometheus → Grafana 대시보드 (에러율/p50/p99)
+      └─▶ Data Prepper     → OpenSearch  ← 이 UI가 읽는 경로
+```
+
+**Data Prepper가 하는 일:** OTel이 보내는 OTLP 형식은 OpenSearch가 바로 이해하지 못하므로, 중간에서 JSON으로 변환해 넣어준다. 이때 동일 trace의 스팬들을 **최대 180초 동안 버퍼에 모았다가** 한 번에 기록한다. 그래서 방금 발생한 요청이 이 UI에 뜨기까지 최대 3분 정도 지연될 수 있다 — 실시간 대시보드가 아니라 VOC 조사용 도구이기 때문에 감내 가능한 트레이드오프로 판단했다.
+
+**서비스 간 화살표(Service Map)가 그려지는 조건:** backend가 SQS에 메시지를 발행(PRODUCER)하고 cpu-worker가 그 메시지를 수신(CONSUMER)할 때, 두 스팬이 같은 traceId를 공유하도록 SQS 메시지 속성에 트레이스 컨텍스트(`traceparent`)를 실어 보낸다. Data Prepper는 이 PRODUCER→CONSUMER 관계를 180초 슬라이딩 윈도우 안에서 감지했을 때만 Service Map에 엣지를 그린다. 즉 화면에 backend와 cpu-worker가 떠 있어도 그 사이 화살표가 안 보인다면, 최근 180초 내에 실제 호출이 없었거나 아직 버퍼링 중이라는 뜻이다.
+
+**로그는 트레이스와 다른 경로로 온다:** 각 서비스는 `OTEL_LOGS_EXPORTER=none`으로 설정되어 있어 로그를 OTel로 보내지 않는다. 대신 Pod의 stdout/stderr를 Promtail이 수집해서 Loki(S3 backend)에 저장한다. 그래서 TraceDetail에서 "로그 보기"를 누르면 traceId가 아니라 **스팬의 서비스명 + 시간 범위(±1분)** 로 Loki를 역으로 조회하는 방식으로 연결된다.
+
 ## 실행
 
 ```bash
