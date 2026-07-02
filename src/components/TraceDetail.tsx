@@ -189,7 +189,9 @@ export default function TraceDetail({ traceId, onBack, onViewLogs }: Props) {
                   {selected.status}
                 </span>
                 <span className={styles.k}>Start</span>
-                <span className={styles.v}>{selected.startTime}</span>
+                <span className={styles.v}>
+                  {new Date(selected.startTime).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}
+                </span>
                 <span className={styles.k}>Duration</span>
                 <span className={styles.v}>
                   {Math.round((selected.durationInNanos ?? 0) / 1_000_000)}ms

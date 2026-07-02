@@ -50,14 +50,20 @@ function detectLevel(line: string): Level {
   return 'info';
 }
 
+const KST = 'Asia/Seoul';
+
 function formatTs(tsNs: string): string {
   const ms = parseInt(tsNs.slice(0, 13), 10);
   const d = new Date(ms);
-  const hh = d.getHours().toString().padStart(2, '0');
-  const mm = d.getMinutes().toString().padStart(2, '0');
-  const ss = d.getSeconds().toString().padStart(2, '0');
+  const base = d.toLocaleTimeString('ko-KR', {
+    timeZone: KST,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
   const ms3 = d.getMilliseconds().toString().padStart(3, '0');
-  return `${hh}:${mm}:${ss}.${ms3}`;
+  return `${base}.${ms3}`;
 }
 
 interface Props {
@@ -76,6 +82,9 @@ export default function PodLogs({ drilldown, onClearDrilldown }: Props) {
   const [range, setRange] = useState<Range>('15m');
   const [filter, setFilter] = useState('');
   const [autoRefresh, setAutoRefresh] = useState(false);
+
+  const [emailInput, setEmailInput] = useState('');
+  const [activeEmail, setActiveEmail] = useState('');
 
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -118,6 +127,16 @@ export default function PodLogs({ drilldown, onClearDrilldown }: Props) {
       .catch(console.error);
   }, [namespace, pod]);
 
+  const applyEmail = () => {
+    const trimmed = emailInput.trim();
+    setActiveEmail(trimmed);
+  };
+
+  const clearEmail = () => {
+    setEmailInput('');
+    setActiveEmail('');
+  };
+
   const doFetch = useCallback(() => {
     if (!namespace) return;
     setLoading(true);
@@ -125,11 +144,11 @@ export default function PodLogs({ drilldown, onClearDrilldown }: Props) {
     const absoluteRange = drilldown
       ? { startSec: drilldown.startMs / 1000, endSec: drilldown.endMs / 1000 }
       : undefined;
-    fetchLogs({ namespace, pod, container, range, absoluteRange })
+    fetchLogs({ namespace, pod, container, range, absoluteRange, userEmail: activeEmail || undefined })
       .then(setEntries)
       .catch((e: unknown) => setError(String(e)))
       .finally(() => setLoading(false));
-  }, [namespace, pod, container, range, drilldown]);
+  }, [namespace, pod, container, range, drilldown, activeEmail]);
 
   useEffect(() => {
     const id = setTimeout(doFetch, 200);
@@ -148,6 +167,19 @@ export default function PodLogs({ drilldown, onClearDrilldown }: Props) {
 
   const showPodColumn = !pod;
 
+  function highlightEmail(line: string, email: string) {
+    if (!email) return <>{line}</>;
+    const idx = line.indexOf(email);
+    if (idx === -1) return <>{line}</>;
+    return (
+      <>
+        {line.slice(0, idx)}
+        <mark className={styles.emailMark}>{email}</mark>
+        {line.slice(idx + email.length)}
+      </>
+    );
+  }
+
   return (
     <div className={styles.wrap}>
       {drilldown && (
@@ -155,9 +187,9 @@ export default function PodLogs({ drilldown, onClearDrilldown }: Props) {
           <span>
             트레이스 드릴다운 — <strong>{drilldown.serviceName}</strong>
             {' · '}
-            {new Date(drilldown.startMs + 60_000).toLocaleTimeString('ko-KR')}
+            {new Date(drilldown.startMs + 60_000).toLocaleTimeString('ko-KR', { timeZone: KST })}
             {' ~ '}
-            {new Date(drilldown.endMs - 60_000).toLocaleTimeString('ko-KR')}
+            {new Date(drilldown.endMs - 60_000).toLocaleTimeString('ko-KR', { timeZone: KST })}
           </span>
           {onClearDrilldown && (
             <button className={styles.clearBtn} onClick={onClearDrilldown}>
@@ -222,6 +254,20 @@ export default function PodLogs({ drilldown, onClearDrilldown }: Props) {
           10s 자동
         </label>
 
+        <div className={styles.emailRow}>
+          <input
+            className={`${styles.filterInput} ${activeEmail ? styles.filterActive : ''}`}
+            placeholder="user.email 검색..."
+            value={emailInput}
+            onChange={(e) => setEmailInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') applyEmail(); }}
+          />
+          <button className={styles.btn} onClick={applyEmail}>검색</button>
+          {activeEmail && (
+            <button className={styles.clearEmailBtn} onClick={clearEmail} title="이메일 필터 해제">✕</button>
+          )}
+        </div>
+
         <input
           className={styles.filterInput}
           placeholder="로그 내용 필터..."
@@ -259,7 +305,7 @@ export default function PodLogs({ drilldown, onClearDrilldown }: Props) {
                 </span>
               )}
               <span className={styles.logLine} style={{ color: colors.text }}>
-                {entry.line}
+                {activeEmail ? highlightEmail(entry.line, activeEmail) : entry.line}
               </span>
             </div>
           );

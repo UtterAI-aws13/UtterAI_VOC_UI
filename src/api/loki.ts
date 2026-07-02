@@ -50,13 +50,15 @@ export async function fetchLogs(opts: {
   range: string;
   limit?: number;
   absoluteRange?: { startSec: number; endSec: number };
+  userEmail?: string;
 }): Promise<LogEntry[]> {
-  const { namespace, pod, container, range, limit = 300, absoluteRange } = opts;
+  const { namespace, pod, container, range, limit = 300, absoluteRange, userEmail } = opts;
 
   const parts = [`namespace="${namespace}"`];
   if (pod) parts.push(`pod="${pod}"`);
   if (container) parts.push(`container="${container}"`);
   const selector = `{${parts.join(', ')}}`;
+  const query = userEmail ? `${selector} |= ${JSON.stringify(userEmail)}` : selector;
 
   let startSec: number, endSec: number;
   if (absoluteRange) {
@@ -69,7 +71,7 @@ export async function fetchLogs(opts: {
   }
 
   const data = await lokiGet('/api/v1/query_range', {
-    query: selector,
+    query,
     start: startSec.toFixed(3),
     end: endSec.toFixed(3),
     limit: String(limit),

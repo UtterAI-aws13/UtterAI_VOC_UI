@@ -30,14 +30,19 @@ function nodeColor(stat: ServiceStat | undefined): string {
 }
 
 function nodeLabel(id: string, stat: ServiceStat | undefined): string {
-  if (!stat || stat.total === 0) return `${id}\n— req  —% err\np99: —`;
-  return `${id}\n${stat.total} req  ${stat.errorRate.toFixed(1)}% err\np99: ${stat.p99Ms}ms`;
+  if (!stat || stat.total === 0) return id;
+  return `${id}\n${stat.total} req · ${stat.errorRate.toFixed(1)}% err`;
 }
 
 export default function ServiceMap({ edges, stats, onNodeClick }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core | null>(null);
+  const onNodeClickRef = useRef(onNodeClick);
+  const savedPositions = useRef<Record<string, { x: number; y: number }>>({});
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
+
+  // Always keep ref current — no effect needed, avoids useEffect dependency
+  onNodeClickRef.current = onNodeClick;
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -49,22 +54,26 @@ export default function ServiceMap({ edges, stats, onNodeClick }: Props) {
     edges.forEach((e) => { nodeIds.add(e.source); nodeIds.add(e.target); });
     stats.forEach((s) => nodeIds.add(s.service));
 
-    const nodes = [...nodeIds].map((id) => {
+    type CyNodeDef = {
+      data: { id: string; label: string; borderColor: string };
+      position?: { x: number; y: number };
+    };
+
+    const nodes: CyNodeDef[] = [...nodeIds].map((id) => {
       const stat = statMap[id];
+      const savedPos = savedPositions.current[id];
       return {
-        data: {
-          id,
-          label: nodeLabel(id, stat),
-          borderColor: nodeColor(stat),
-        },
+        data: { id, label: nodeLabel(id, stat), borderColor: nodeColor(stat) },
+        ...(savedPos ? { position: savedPos } : {}),
       };
     });
 
-    // Deduplicate edges (same source→target pair)
+    // Deduplicate by (source, target, traceGroup) — keeps distinct flows like
+    // backend→cpu-worker via "analysis-jobs" AND via "finalize" as separate edges
     const seen = new Set<string>();
     const cyEdges = edges
       .filter((e) => {
-        const key = `${e.source}→${e.target}`;
+        const key = `${e.source}→${e.target}:${e.traceGroupName || e.resource}`;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
@@ -85,6 +94,9 @@ export default function ServiceMap({ edges, stats, onNodeClick }: Props) {
 
     if (cyRef.current) cyRef.current.destroy();
 
+    const allHavePositions =
+      nodes.length > 0 && nodes.every((n) => !!savedPositions.current[n.data.id]);
+
     cyRef.current = cytoscape({
       container: containerRef.current,
       elements: { nodes, edges: cyEdges },
@@ -102,7 +114,7 @@ export default function ServiceMap({ edges, stats, onNodeClick }: Props) {
             'font-size': '11px',
             'font-family': "'Inter', system-ui, sans-serif",
             width: 160,
-            height: 72,
+            height: 60,
             shape: 'roundrectangle',
             'text-wrap': 'wrap',
             'text-max-width': '148px',
@@ -142,18 +154,20 @@ export default function ServiceMap({ edges, stats, onNodeClick }: Props) {
           style: { 'line-color': '#90a4ae', 'target-arrow-color': '#90a4ae' },
         },
       ],
-      layout: {
-        name: 'breadthfirst',
-        directed: true,
-        padding: 60,
-        spacingFactor: 1.8,
-      },
+      layout: allHavePositions
+        ? { name: 'preset' }
+        : { name: 'breadthfirst', directed: true, padding: 60, spacingFactor: 1.8 },
       userZoomingEnabled: true,
       userPanningEnabled: true,
     });
 
     cyRef.current.on('tap', 'node', (evt) => {
-      onNodeClick(evt.target.id());
+      onNodeClickRef.current(evt.target.id());
+    });
+
+    // Save positions whenever user drags a node
+    cyRef.current.on('dragfree', 'node', (evt) => {
+      savedPositions.current[evt.target.id()] = evt.target.position();
     });
 
     cyRef.current.on('mouseover', 'node', (evt) => {
@@ -171,7 +185,7 @@ export default function ServiceMap({ edges, stats, onNodeClick }: Props) {
       cyRef.current?.destroy();
       cyRef.current = null;
     };
-  }, [edges, stats, onNodeClick]);
+  }, [edges, stats]); // onNodeClick intentionally excluded — handled via ref
 
   return (
     <div className={styles.wrap}>

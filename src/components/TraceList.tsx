@@ -139,7 +139,7 @@ export default function TraceList({ serviceName, onSelectTrace }: Props) {
                   {t.rootName}
                 </td>
                 <td className={styles.time}>
-                  {new Date(t.startTime).toLocaleTimeString('ko-KR')}
+                  {new Date(t.startTime).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul' })}
                 </td>
                 <td className={styles.dur}>{t.durationMs}ms</td>
               </tr>
