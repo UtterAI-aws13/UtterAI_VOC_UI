@@ -43,6 +43,10 @@ const RANGE_SECONDS: Record<string, number> = {
   '24h': 86_400,
 };
 
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 export async function fetchLogs(opts: {
   namespace: string;
   pod: string;
@@ -58,7 +62,9 @@ export async function fetchLogs(opts: {
   if (pod) parts.push(`pod="${pod}"`);
   if (container) parts.push(`container="${container}"`);
   const selector = `{${parts.join(', ')}}`;
-  const query = userEmail ? `${selector} |= ${JSON.stringify(userEmail)}` : selector;
+  const query = userEmail
+    ? `${selector} |~ ${JSON.stringify(`(?i)${escapeRegex(userEmail)}`)}`
+    : selector;
 
   let startSec: number, endSec: number;
   if (absoluteRange) {
